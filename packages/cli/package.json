@@ -1,0 +1,27 @@
+{
+  "name": "@coverage-improver/cli",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "CLI for Coverage Improver - analyze and improve TypeScript test coverage",
+  "bin": {
+    "cov": "./dist/cli.js"
+  },
+  "main": "dist/cli.js",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/cli.js"
+  },
+  "dependencies": {
+    "commander": "^14.0.0",
+    "chalk": "^5.4.0",
+    "ora": "^8.1.0",
+    "cli-table3": "^0.6.5",
+    "@coverage-improver/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}
