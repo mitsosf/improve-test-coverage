@@ -14,6 +14,7 @@
     "start": "node dist/cli.js"
   },
   "dependencies": {
+    "@coverage-improver/shared": "workspace:*",
     "commander": "^14.0.0",
     "chalk": "^5.4.0",
     "ora": "^8.1.0",

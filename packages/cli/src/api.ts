@@ -6,7 +6,7 @@ import type {
   CreateRepositoryRequest,
   CreateJobRequest,
   AiProvider,
-} from './types.js';
+} from '@coverage-improver/shared';
 
 let apiUrl = 'http://localhost:3000/api';
 

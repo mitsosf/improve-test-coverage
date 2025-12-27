@@ -4,8 +4,8 @@ export * from './persistence/sqlite';
 // GitHub
 export * from './github';
 
-// Coverage
-export * from './coverage';
+// Parsers
+export * from './parsers';
 
 // AI Providers
 export * from './ai';

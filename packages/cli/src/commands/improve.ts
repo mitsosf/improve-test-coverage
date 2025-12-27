@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import ora, { type Ora } from 'ora';
 import { createJob, getJob, getCoverage, setApiUrl } from '../api.js';
-import type { AiProvider } from '../types.js';
+import type { AiProvider } from '@coverage-improver/shared';
 
 export const improveCommand = new Command('improve')
   .description('Start test improvement jobs for files')
