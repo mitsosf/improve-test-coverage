@@ -229,6 +229,7 @@ export class RepositoriesController {
         branch: repository.branch,
         defaultBranch: repository.defaultBranch,
         lastAnalyzedAt: repository.lastAnalyzedAt,
+        createdAt: repository.createdAt,
       },
       summary: {
         totalFiles: allFiles.length,

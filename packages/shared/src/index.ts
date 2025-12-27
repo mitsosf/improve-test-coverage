@@ -25,13 +25,24 @@ export interface BranchesDto {
 }
 
 // Coverage DTOs
+export type CoverageFileStatus = 'pending' | 'improving' | 'improved';
+
 export interface CoverageFileDto {
   id: string;
   path: string;
   coveragePercentage: number;
   uncoveredLines: number[];
-  status: 'pending' | 'improving' | 'improved';
-  projectDir: string | null; // Relative path to project directory for monorepos (e.g., 'ui/')
+  status: CoverageFileStatus;
+  projectDir: string | null;
+  needsImprovement: boolean;
+}
+
+export interface CoverageSummaryDto {
+  totalFiles: number;
+  averageCoverage: number;
+  filesBelowThreshold: number;
+  filesImproving: number;
+  filesImproved: number;
 }
 
 export interface PaginationDto {
@@ -44,11 +55,7 @@ export interface PaginationDto {
 export interface CoverageReportDto {
   repository: RepositoryDto;
   files: CoverageFileDto[];
-  summary: {
-    totalFiles: number;
-    averageCoverage: number;
-    filesBelowThreshold: number;
-  };
+  summary: CoverageSummaryDto;
   pagination?: PaginationDto;
 }
 

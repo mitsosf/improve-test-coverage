@@ -1,6 +1,7 @@
 import { IsUUID, IsOptional, IsEnum, IsArray, ArrayMinSize } from 'class-validator';
-import { AiProvider } from '../../../domain/entities/Job';
+import type { AiProvider } from '@coverage-improver/shared';
 
+// Request DTO with validation (stays in backend)
 export class CreateJobDto {
   @IsUUID()
   repositoryId!: string;
@@ -15,23 +16,10 @@ export class CreateJobDto {
   aiProvider?: AiProvider;
 }
 
-export class JobResponseDto {
-  id!: string;
-  repositoryId!: string;
-  repositoryName!: string;
-  fileIds!: string[];
-  filePaths!: string[];
-  fileCount!: number;
-  status!: string;
-  aiProvider!: string;
-  progress!: number;
-  prUrl!: string | null;
-  error!: string | null;
-  createdAt!: Date;
-  updatedAt!: Date;
-}
-
-export class JobListResponseDto {
-  jobs!: JobResponseDto[];
-  total!: number;
-}
+// Re-export response types from shared
+export type {
+  JobDto as JobResponseDto,
+  JobListDto as JobListResponseDto,
+  JobStatus,
+  AiProvider,
+} from '@coverage-improver/shared';

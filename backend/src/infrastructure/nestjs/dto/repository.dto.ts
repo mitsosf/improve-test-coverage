@@ -1,5 +1,6 @@
-import { IsString, IsUrl, IsOptional, MinLength } from 'class-validator';
+import { IsString, IsUrl, IsOptional } from 'class-validator';
 
+// Request DTOs with validation (stay in backend)
 export class CreateRepositoryDto {
   @IsUrl()
   url!: string;
@@ -9,24 +10,14 @@ export class CreateRepositoryDto {
   branch?: string;
 }
 
-export class RepositoryResponseDto {
-  id!: string;
-  url!: string;
-  name!: string;
-  branch!: string;
-  defaultBranch!: string;
-  lastAnalyzedAt!: Date | null;
-  createdAt!: Date;
-}
-
 export class AnalyzeRepositoryDto {
   @IsString()
   @IsOptional()
   branch?: string;
 }
 
-export class BranchResponseDto {
-  branches!: string[];
-  defaultBranch!: string;
-  allTracked!: boolean;
-}
+// Re-export response types from shared
+export type {
+  RepositoryDto as RepositoryResponseDto,
+  BranchesDto as BranchResponseDto,
+} from '@coverage-improver/shared';
