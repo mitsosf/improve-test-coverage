@@ -16,6 +16,9 @@ import {
   // Runner
   CommandRunner,
   COMMAND_RUNNER,
+  // Sandbox
+  DockerSandbox,
+  SANDBOX,
 } from '../..';
 import { JobProcessor } from '../../../application';
 import {
@@ -81,6 +84,10 @@ const DATABASE_TOKEN = Symbol('DATABASE');
       provide: COMMAND_RUNNER,
       useFactory: () => new CommandRunner(),
     },
+    {
+      provide: SANDBOX,
+      useFactory: () => new DockerSandbox(),
+    },
 
     // Unified job processor
     {
@@ -92,7 +99,7 @@ const DATABASE_TOKEN = Symbol('DATABASE');
         githubService: GitHubService,
         githubApiClient: GitHubApiClient,
         coverageParser: CoverageParser,
-        commandRunner: CommandRunner,
+        sandbox: DockerSandbox,
       ) => new JobProcessor(
         jobRepo,
         repoRepository,
@@ -100,7 +107,7 @@ const DATABASE_TOKEN = Symbol('DATABASE');
         githubService,
         githubApiClient,
         coverageParser,
-        commandRunner,
+        sandbox,
       ),
       inject: [
         JOB_REPOSITORY,
@@ -109,7 +116,7 @@ const DATABASE_TOKEN = Symbol('DATABASE');
         GITHUB_SERVICE,
         GITHUB_API_CLIENT,
         COVERAGE_PARSER,
-        COMMAND_RUNNER,
+        SANDBOX,
       ],
     },
   ],
@@ -122,6 +129,7 @@ const DATABASE_TOKEN = Symbol('DATABASE');
     GITHUB_API_CLIENT,
     COVERAGE_PARSER,
     COMMAND_RUNNER,
+    SANDBOX,
     JobProcessor,
   ],
 })

@@ -5,20 +5,21 @@ import {
   ICoverageFileRepository,
   CoverageFile,
   CoveragePercentage,
+  FilePath,
   GitHubPrUrl,
+  GitHubRepo,
   AiProvider,
 } from '../../domain';
 import {
   IGitHubService,
   IGitHubApiClient,
   ICoverageParser,
-  ICommandRunner,
   ClaudeProvider,
   OpenAiProvider,
+  ISandbox,
 } from '../../infrastructure';
-import { CoverageService } from './CoverageService';
 import { join, basename } from 'path';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { execSync } from 'child_process';
 
 export interface JobProgressCallback {
@@ -26,13 +27,12 @@ export interface JobProgressCallback {
 }
 
 /**
- * Job orchestrator - handles job lifecycle and delegates business logic.
- * Analysis jobs: delegates to CoverageService
- * Improvement jobs: generates tests for files, creates PR
+ * Job orchestrator - handles job lifecycle and delegates to sandbox for untrusted operations.
+ * Analysis jobs: runs tests in sandbox, parses coverage, stores results
+ * Improvement jobs: gets source files via sandbox, generates tests via AI, validates in sandbox, creates PR
  */
 export class JobProcessor {
   private progressCallback?: JobProgressCallback;
-  private readonly coverageService: CoverageService;
   private readonly coverageThreshold: number;
 
   constructor(
@@ -42,16 +42,9 @@ export class JobProcessor {
     private readonly githubService: IGitHubService,
     private readonly githubApiClient: IGitHubApiClient,
     private readonly coverageParser: ICoverageParser,
-    private readonly commandRunner: ICommandRunner,
+    private readonly sandbox: ISandbox,
   ) {
     this.coverageThreshold = parseInt(process.env.COVERAGE_THRESHOLD || '80', 10);
-    this.coverageService = new CoverageService(
-      repoRepository,
-      coverageFileRepo,
-      githubService,
-      coverageParser,
-      commandRunner,
-    );
   }
 
   setProgressCallback(callback: JobProgressCallback): void {
@@ -98,30 +91,98 @@ export class JobProcessor {
   // ============= ANALYSIS JOB EXECUTION =============
 
   private async executeAnalysisJob(job: Job): Promise<Job> {
-    const workDir = this.githubService.getTempDir(job.id);
-
     try {
       job.start();
       await this.jobRepo.save(job);
       this.emitProgress(job.id, 5, 'Starting analysis');
 
-      // Delegate to CoverageService with progress updates
-      const result = await this.coverageService.analyze(
-        job.repositoryId,
-        job.repositoryUrl!,
-        job.branch || 'main',
-        workDir,
-        (progress, message) => {
-          job.updateProgress(progress);
-          this.jobRepo.save(job);
-          this.emitProgress(job.id, progress, message);
+      // Get or create repository
+      let repository = await this.repoRepository.findById(job.repositoryId);
+      if (!repository) {
+        const { owner, name } = GitHubRepo.fromGitHubUrl(job.repositoryUrl!);
+        repository = GitHubRepo.create({
+          url: job.repositoryUrl!,
+          owner,
+          name,
+          branch: job.branch || 'main',
+          defaultBranch: job.branch || 'main',
+        });
+        await this.repoRepository.save(repository);
+      }
+
+      this.emitProgress(job.id, 10, 'Running analysis in sandbox');
+
+      // Run analysis in sandbox (clone, install, test - all isolated)
+      const sandboxResult = await this.sandbox.runAnalysis({
+        repoUrl: job.repositoryUrl!,
+        branch: job.branch || 'main',
+        onProgress: (msg) => {
+          console.log(`[Sandbox] ${msg}`);
         },
-      );
+      });
+
+      if (!sandboxResult.success) {
+        throw new Error(sandboxResult.error || 'Sandbox analysis failed');
+      }
+
+      this.emitProgress(job.id, 60, 'Parsing coverage results');
+
+      // Parse coverage from sandbox output
+      const coverageReport = this.parseSandboxCoverage(sandboxResult.coverageJson);
+
+      // Add uncovered source files (0% coverage)
+      if (sandboxResult.sourceFiles) {
+        const coveredPaths = new Set(coverageReport.files.map(f => f.path));
+        for (const sourceFile of sandboxResult.sourceFiles) {
+          if (!coveredPaths.has(sourceFile.path)) {
+            coverageReport.files.push({
+              path: sourceFile.path,
+              linesCovered: 0,
+              linesTotal: 1,
+              percentage: 0,
+              uncoveredLines: [1],
+            });
+          }
+        }
+      }
+
+      // Recalculate total coverage
+      const totalCovered = coverageReport.files.reduce((sum, f) => sum + f.linesCovered, 0);
+      const totalLines = coverageReport.files.reduce((sum, f) => sum + f.linesTotal, 0);
+      coverageReport.totalCoverage = totalLines > 0
+        ? Math.round((totalCovered / totalLines) * 100 * 100) / 100
+        : 0;
+      coverageReport.files.sort((a, b) => a.percentage - b.percentage);
+
+      this.emitProgress(job.id, 80, 'Storing coverage data');
+
+      // Clear old coverage data and store new
+      await this.coverageFileRepo.deleteByRepositoryId(repository.id);
+      let filesBelowThreshold = 0;
+
+      for (const fileReport of coverageReport.files) {
+        const coverageFile = CoverageFile.create({
+          repositoryId: repository.id,
+          path: FilePath.create(fileReport.path),
+          coveragePercentage: CoveragePercentage.create(fileReport.percentage),
+          uncoveredLines: fileReport.uncoveredLines,
+          projectDir: undefined, // Sandbox handles project detection internally
+        });
+        await this.coverageFileRepo.save(coverageFile);
+
+        if (fileReport.percentage < this.coverageThreshold) {
+          filesBelowThreshold++;
+        }
+      }
+
+      // Update repository
+      repository.markAsAnalyzed();
+      await this.repoRepository.save(repository);
 
       // Complete job
-      job.completeAnalysis(result.filesFound, result.filesBelowThreshold);
+      job.completeAnalysis(coverageReport.files.length, filesBelowThreshold);
       await this.jobRepo.save(job);
-      this.emitProgress(job.id, 100, `Analysis complete: ${result.filesFound} files, ${result.filesBelowThreshold} below threshold`);
+      this.emitProgress(job.id, 100, `Analysis complete: ${coverageReport.files.length} files, ${filesBelowThreshold} below threshold`);
 
       return job;
     } catch (error) {
@@ -130,8 +191,6 @@ export class JobProcessor {
       await this.jobRepo.save(job);
       this.emitProgress(job.id, 0, `Failed: ${errorMessage}`);
       return job;
-    } finally {
-      await this.githubService.cleanupWorkDir(workDir);
     }
   }
 
@@ -162,8 +221,37 @@ export class JobProcessor {
         })
       );
 
-      await this.updateAndSaveProgress(job, 10, 'Cloning repository');
+      await this.updateAndSaveProgress(job, 10, 'Getting source files from sandbox');
 
+      // First, run sandbox analysis to get source file contents
+      const analysisResult = await this.sandbox.runAnalysis({
+        repoUrl: repository.url,
+        branch: repository.defaultBranch,
+        onProgress: (msg) => console.log(`[Sandbox] ${msg}`),
+      });
+
+      if (!analysisResult.success || !analysisResult.sourceFiles) {
+        throw new Error('Failed to get source files from sandbox');
+      }
+
+      // Match coverage files to source files
+      const filesToImprove = coverageFiles.map(cf => {
+        const sourceFile = analysisResult.sourceFiles!.find(sf =>
+          sf.path === cf.path.value || sf.path.endsWith(cf.path.value) || cf.path.value.endsWith(sf.path)
+        );
+        if (!sourceFile) {
+          throw new Error(`Source file not found in sandbox: ${cf.path.value}`);
+        }
+        return {
+          filePath: cf.path.value,
+          fileContent: sourceFile.content,
+          uncoveredLines: cf.uncoveredLines,
+        };
+      });
+
+      await this.updateAndSaveProgress(job, 30, `Generating tests for ${fileCount} file${fileCount > 1 ? 's' : ''}`);
+
+      // Clone locally for AI to work with (AI is trusted, runs on host)
       clonePath = this.githubService.getTempDir(job.id);
       await this.githubService.clone({
         repoUrl: repository.url,
@@ -171,39 +259,7 @@ export class JobProcessor {
         branch: repository.defaultBranch,
       });
 
-      await this.updateAndSaveProgress(job, 15, 'Installing dependencies');
-      // Use first file's project dir (they should all be in the same project)
-      const projectDir = coverageFiles[0].projectDir
-        ? join(clonePath, coverageFiles[0].projectDir)
-        : clonePath;
-
-      const packageManager = this.commandRunner.detectPackageManager(projectDir);
-      await this.commandRunner.installDependencies(projectDir, packageManager);
-
-      await this.updateAndSaveProgress(job, 20, 'Creating branch');
-
-      // Generate branch name from first file, or use generic for multi-file
-      const branchName = fileCount === 1
-        ? this.githubService.generateBranchName(coverageFiles[0].path.value)
-        : this.githubService.generateBranchName(`${fileCount}-files`);
-      await this.githubService.createBranch(clonePath, branchName);
-
-      // Prepare file contexts for AI
-      const filesToImprove = coverageFiles.map(cf => {
-        const sourceFilePath = join(clonePath!, cf.path.value);
-        if (!existsSync(sourceFilePath)) {
-          throw new Error(`Source file not found: ${cf.path.value}`);
-        }
-        return {
-          filePath: cf.path.value,
-          fileContent: readFileSync(sourceFilePath, 'utf-8'),
-          uncoveredLines: cf.uncoveredLines,
-        };
-      });
-
-      await this.updateAndSaveProgress(job, 30, `Generating tests for ${fileCount} file${fileCount > 1 ? 's' : ''}`);
-
-      // Get AI provider and generate tests for all files
+      // Get AI provider and generate tests
       const aiProvider = this.getAiProvider(job.aiProvider!);
       await aiProvider.generateTests({
         files: filesToImprove,
@@ -220,30 +276,40 @@ export class JobProcessor {
         throw new Error('AI failed to create any test files');
       }
 
-      // Validate test content
+      // Validate test content and collect test file contents
+      const testFileContents: Array<{ path: string; content: string }> = [];
       for (const testFile of testFiles) {
         const testPath = join(clonePath, testFile);
         const testContent = readFileSync(testPath, 'utf-8');
         if (!this.isValidTestContent(testContent)) {
           throw new Error(`Invalid test content in ${testFile}`);
         }
+        testFileContents.push({ path: testFile, content: testContent });
       }
 
       // Reset any non-test files the AI may have touched
       this.resetNonTestFiles(clonePath);
 
-      const finalChangedFiles = this.getChangedFiles(clonePath);
-      const invalidFiles = finalChangedFiles.filter(f => !this.isTestFile(f));
-      if (invalidFiles.length > 0) {
-        throw new Error(`Invalid files modified: ${invalidFiles.join(', ')}`);
+      await this.updateAndSaveProgress(job, 60, 'Running tests in sandbox');
+
+      // Run tests in sandbox with generated test files
+      const testResult = await this.sandbox.runTests({
+        repoUrl: repository.url,
+        branch: repository.defaultBranch,
+        testFiles: testFileContents,
+        onProgress: (msg) => console.log(`[Sandbox] ${msg}`),
+      });
+
+      if (!testResult.success) {
+        throw new Error(testResult.error || 'Sandbox test run failed');
       }
 
-      await this.updateAndSaveProgress(job, 60, 'Running tests');
+      if (!testResult.testsPassed) {
+        throw new Error('Generated tests failed');
+      }
 
-      await this.commandRunner.runTestsWithCoverage(projectDir, packageManager, true);
-
-      this.coverageParser.setProjectRoot(clonePath);
-      const coverageReport = await this.parseCoverageOutput(projectDir);
+      // Parse new coverage
+      const coverageReport = this.parseSandboxCoverage(testResult.coverageJson);
 
       // Update coverage for each file
       let totalImprovedCoverage = 0;
@@ -268,6 +334,13 @@ export class JobProcessor {
 
       await this.updateAndSaveProgress(job, 80, 'Committing changes');
 
+      // Create branch and commit (trusted git operations on host)
+      const branchName = fileCount === 1
+        ? this.githubService.generateBranchName(coverageFiles[0].path.value)
+        : this.githubService.generateBranchName(`${fileCount}-files`);
+      await this.githubService.createBranch(clonePath, branchName);
+
+      const finalChangedFiles = this.getChangedFiles(clonePath);
       const commitMessage = fileCount === 1
         ? `test: improve coverage for ${coverageFiles[0].path.value}\n\nCoverage: ${avgCoverage.toFixed(1)}%`
         : `test: improve coverage for ${fileCount} files\n\nFiles: ${job.filePaths.join(', ')}\nAverage coverage: ${avgCoverage.toFixed(1)}%`;
@@ -335,21 +408,70 @@ export class JobProcessor {
     return provider === 'claude' ? new ClaudeProvider() : new OpenAiProvider();
   }
 
-  private async parseCoverageOutput(projectDir: string): Promise<{
+  private parseSandboxCoverage(coverageJson?: Record<string, unknown>): {
     files: Array<{ path: string; linesCovered: number; linesTotal: number; percentage: number; uncoveredLines: number[] }>;
     totalCoverage: number;
-  }> {
-    const istanbulPath = join(projectDir, 'coverage', 'coverage-final.json');
-    if (existsSync(istanbulPath)) {
-      return this.coverageParser.parseIstanbulJson(istanbulPath);
+  } {
+    if (!coverageJson) {
+      return { files: [], totalCoverage: 0 };
     }
 
-    const lcovPath = join(projectDir, 'coverage', 'lcov.info');
-    if (existsSync(lcovPath)) {
-      return this.coverageParser.parseLcov(lcovPath);
+    // Parse Istanbul format coverage JSON
+    const files: Array<{ path: string; linesCovered: number; linesTotal: number; percentage: number; uncoveredLines: number[] }> = [];
+
+    for (const [filePath, data] of Object.entries(coverageJson)) {
+      const fileData = data as {
+        s?: Record<string, number>;
+        statementMap?: Record<string, { start: { line: number }; end: { line: number } }>;
+      };
+
+      if (!fileData.s || !fileData.statementMap) continue;
+
+      const statementCounts = fileData.s;
+      const statementMap = fileData.statementMap;
+
+      let covered = 0;
+      let total = 0;
+      const uncoveredLines: number[] = [];
+      const linesCovered = new Set<number>();
+      const linesUncovered = new Set<number>();
+
+      for (const [stmtId, count] of Object.entries(statementCounts)) {
+        total++;
+        const stmt = statementMap[stmtId];
+        if (stmt) {
+          if (count > 0) {
+            covered++;
+            for (let line = stmt.start.line; line <= stmt.end.line; line++) {
+              linesCovered.add(line);
+            }
+          } else {
+            for (let line = stmt.start.line; line <= stmt.end.line; line++) {
+              if (!linesCovered.has(line)) {
+                linesUncovered.add(line);
+              }
+            }
+          }
+        }
+      }
+
+      // Convert to relative path if needed
+      const relativePath = filePath.replace(/^\/workspace\/repo\//, '');
+
+      files.push({
+        path: relativePath,
+        linesCovered: covered,
+        linesTotal: total,
+        percentage: total > 0 ? Math.round((covered / total) * 100 * 100) / 100 : 0,
+        uncoveredLines: Array.from(linesUncovered).sort((a, b) => a - b),
+      });
     }
 
-    return { files: [], totalCoverage: 0 };
+    const totalCovered = files.reduce((sum, f) => sum + f.linesCovered, 0);
+    const totalLines = files.reduce((sum, f) => sum + f.linesTotal, 0);
+    const totalCoverage = totalLines > 0 ? Math.round((totalCovered / totalLines) * 100 * 100) / 100 : 0;
+
+    return { files, totalCoverage };
   }
 
   private isTestFile(filePath: string): boolean {
