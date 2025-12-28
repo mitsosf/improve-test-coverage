@@ -18,5 +18,9 @@ if [ -S /var/run/docker.sock ]; then
     fi
 fi
 
+# Ensure data and temp directories exist and are writable by appuser
+mkdir -p /app/data /tmp/coverage-improver
+chown -R appuser:appgroup /app/data /tmp/coverage-improver
+
 # Drop to non-root user and run the main command
 exec su-exec appuser "$@"
