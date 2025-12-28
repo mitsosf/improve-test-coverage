@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
 import Table from 'cli-table3';
-import { createRepository, analyzeRepository, setApiUrl, getApiUrl } from '../api.js';
+import { createRepository, analyzeRepository, getAnalysisJob, getCoverage, setApiUrl, getApiUrl } from '../api.js';
 
 export const analyzeCommand = new Command('analyze')
   .description('Analyze test coverage for a GitHub repository')
@@ -21,8 +21,35 @@ export const analyzeCommand = new Command('analyze')
       const repo = await createRepository(repoUrl, options.branch);
       spinner.text = `Analyzing coverage for ${repo.name}...`;
 
-      // Trigger analysis
-      const report = await analyzeRepository(repo.id, options.branch);
+      // Trigger analysis job
+      let currentJob = await analyzeRepository(repo.id, options.branch);
+
+      // Poll for job completion
+      const maxWaitTime = 5 * 60 * 1000; // 5 minutes
+      const pollInterval = 2000; // 2 seconds
+      const startTime = Date.now();
+
+      while (currentJob.status !== 'completed' && currentJob.status !== 'failed') {
+        if (Date.now() - startTime > maxWaitTime) {
+          throw new Error('Analysis timed out');
+        }
+
+        spinner.text = `Analyzing coverage for ${repo.name}... ${currentJob.progress}%`;
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
+
+        const updatedJob = await getAnalysisJob(repo.id);
+        if (!updatedJob) {
+          throw new Error('Analysis job not found');
+        }
+        currentJob = updatedJob;
+      }
+
+      if (currentJob.status === 'failed') {
+        throw new Error(currentJob.error || 'Analysis failed');
+      }
+
+      // Fetch coverage data
+      const report = await getCoverage(repo.id);
       spinner.succeed(`Analysis complete for ${repo.name}`);
 
       // Display results

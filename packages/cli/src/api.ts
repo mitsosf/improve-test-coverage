@@ -7,6 +7,7 @@ import type {
   CreateJobRequest,
   AiProvider,
   PaginatedRepositoriesDto,
+  AnalysisJobDto,
 } from '@coverage-improver/shared';
 
 let apiUrl = 'http://localhost:3000/api';
@@ -61,11 +62,15 @@ export async function getRepository(id: string): Promise<RepositoryDto> {
   return request<RepositoryDto>(`/repositories/${id}`);
 }
 
-export async function analyzeRepository(id: string, branch?: string): Promise<CoverageReportDto> {
-  return request<CoverageReportDto>(`/repositories/${id}/analyze`, {
+export async function analyzeRepository(id: string, branch?: string): Promise<AnalysisJobDto> {
+  return request<AnalysisJobDto>(`/repositories/${id}/analyze`, {
     method: 'POST',
     body: JSON.stringify({ branch }),
   });
+}
+
+export async function getAnalysisJob(repoId: string): Promise<AnalysisJobDto | null> {
+  return request<AnalysisJobDto | null>(`/repositories/${repoId}/analysis`);
 }
 
 export async function getCoverage(
