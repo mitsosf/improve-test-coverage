@@ -3,13 +3,15 @@
 FROM node:24-alpine AS builder
 
 # Install pnpm
-RUN corepack enable && corepack prepare pnpm@9.15.1 --activate
+RUN corepack enable && corepack prepare pnpm@10.26.2 --activate
 
 WORKDIR /app
 
 # Copy workspace files
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY packages/shared/package.json ./packages/shared/
+COPY packages/cli/package.json ./packages/cli/
+COPY backend/package.json ./backend/
 COPY frontend/package.json ./frontend/
 
 # Install dependencies
