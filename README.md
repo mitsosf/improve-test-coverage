@@ -77,7 +77,7 @@ cd packages/cli && pnpm link --global
 cov analyze https://github.com/user/repo
 
 # List files below threshold
-cov list <repo-id>
+cov list --repo-id <repo-id>
 
 # Start improvement job
 cov improve --file-id <file-id> --repo-id <repo-id>
@@ -94,7 +94,6 @@ cov status <job-id>
 | `ANTHROPIC_API_KEY`  | Anthropic API key for Claude       | One AI required |
 | `OPENAI_API_KEY`     | OpenAI API key for GPT-4           | One AI required |
 | `COVERAGE_THRESHOLD` | Threshold percentage (default: 80) | No              |
-| `DATABASE_PATH`      | SQLite database path               | No              |
 
 ## Architecture
 
