@@ -8,8 +8,8 @@ Try the demo dashboard at: https://coverage.frangiadakis.com
 Check out already completed jobs here: https://coverage.frangiadakis.com/jobs
 
 Already opened PRs: 
-- https://github.com/mitsosf/test-coverage-improvements/pull/28
-- https://github.com/mitsosf/test-coverage-improvements/pull/29
+- https://github.com/mitsosf/demo-test-coverage-improvements/pull/28
+- https://github.com/mitsosf/demo-test-coverage-improvements/pull/29
 
 ## Features
 
